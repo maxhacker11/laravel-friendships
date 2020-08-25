@@ -8,6 +8,8 @@ use Hootlex\Friendships\Status;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Event;
 
+use Illuminate\Support\Arr;
+
 /**
  * Class Friendable
  * @package Hootlex\Friendships\Traits
@@ -32,7 +34,7 @@ trait Friendable
 
         $this->friends()->save($friendship);
       
-        Event::fire('friendships.sent', [$this, $recipient]);
+        Event::dispatch('friendships.sent', [$this, $recipient]);
 
         return $friendship;
 
@@ -47,7 +49,7 @@ trait Friendable
     {
         $deleted = $this->findFriendship($recipient)->delete();
 
-        Event::fire('friendships.cancelled', [$this, $recipient]);
+        Event::dispatch('friendships.cancelled', [$this, $recipient]);
 
         return $deleted;
     }
@@ -93,7 +95,7 @@ trait Friendable
             'status' => Status::ACCEPTED,
         ]);
 
-        Event::fire('friendships.accepted', [$this, $recipient]);
+        Event::dispatch('friendships.accepted', [$this, $recipient]);
       
         return $updated;
     }
@@ -109,7 +111,7 @@ trait Friendable
             'status' => Status::DENIED,
         ]);
 
-        Event::fire('friendships.denied', [$this, $recipient]);
+        Event::dispatch('friendships.denied', [$this, $recipient]);
       
         return $updated;
     }
@@ -191,7 +193,7 @@ trait Friendable
       
         $this->friends()->save($friendship);
 
-        Event::fire('friendships.blocked', [$this, $recipient]);
+        Event::dispatch('friendships.blocked', [$this, $recipient]);
 
         return $friendship;
     }
@@ -205,7 +207,7 @@ trait Friendable
     {
         $deleted = $this->findFriendship($recipient)->whereSender($this)->delete();
 
-        Event::fire('friendships.unblocked', [$this, $recipient]);
+        Event::dispatch('friendships.unblocked', [$this, $recipient]);
       
         return $deleted;
     }
@@ -311,6 +313,20 @@ trait Friendable
     public function getFriends($perPage = 0, $groupSlug = '')
     {
         return $this->getOrPaginate($this->getFriendsQueryBuilder($groupSlug), $perPage);
+    }
+
+    /**
+     * This method will not return Friendship models
+     * It will return the 'friends' models. ex: App\User
+     *
+     * @param int $perPage Number
+     * @param string $groupSlug
+     *
+     * @return \Illuminate\Database\Eloquent\Collection
+     */
+    public function getBlocked($perPage = 0, $groupSlug = '')
+    {
+        return $this->getOrPaginate($this->getBlockedQueryBuilder($groupSlug), $perPage);
     }
     
     /**
@@ -423,6 +439,29 @@ trait Friendable
     }
 
     /**
+     * @param $status
+     * @param string $groupSlug
+     *
+     * @return \Illuminate\Database\Eloquent\Collection
+     */
+    private function findBlocks($status = null, $groupSlug = '')
+    {
+
+        $query = Friendship::where(function ($query) {
+            $query->where(function ($q) {
+                $q->whereSender($this);
+            });
+        })->whereGroup($this, $groupSlug);
+
+        //if $status is passed, add where clause
+        if (!is_null($status)) {
+            $query->where('status', $status);
+        }
+
+        return $query;
+    }
+
+    /**
      * Get the query builder of the 'friend' model
      *
      * @param string $groupSlug
@@ -433,6 +472,23 @@ trait Friendable
     {
 
         $friendships = $this->findFriendships(Status::ACCEPTED, $groupSlug)->get(['sender_id', 'recipient_id']);
+        $recipients  = $friendships->pluck('recipient_id')->all();
+        $senders     = $friendships->pluck('sender_id')->all();
+
+        return $this->where('id', '!=', $this->getKey())->whereIn('id', array_merge($recipients, $senders));
+    }
+
+    /**
+     * Get the query builder of the 'friend' model
+     *
+     * @param string $groupSlug
+     *
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    private function getBlockedQueryBuilder($groupSlug = '')
+    {
+
+        $friendships = $this->findBlocks(Status::BLOCKED, $groupSlug)->get(['sender_id', 'recipient_id']);
         $recipients  = $friendships->pluck('recipient_id')->all();
         $senders     = $friendships->pluck('sender_id')->all();
 
@@ -527,6 +583,7 @@ trait Friendable
         if ($perPage == 0) {
             return $builder->get();
         }
-        return $builder->paginate($perPage);
+        return $builder->paginate($perPage, ['*'], 'friends')
+                    ->appends(Arr::except(request()->query(), 'friends'));
     }
 }
